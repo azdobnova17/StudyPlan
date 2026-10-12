@@ -1,17 +1,22 @@
 import sqlite3
+from datetime import timedelta
 from pathlib import Path
 
-# База хранится рядом с файлами проекта
+
 DB_PATH = Path(__file__).with_name("studyplan.db")
 
 
-def init_db():
-    """Создает базу и таблицы, если их еще нет."""
+def connect():
     connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
+
+
+def init_db():
+    connection = connect()
 
     try:
-        connection.execute("PRAGMA foreign_keys = ON")
-
         connection.executescript("""
             CREATE TABLE IF NOT EXISTS subjects (
                 id INTEGER PRIMARY KEY,
@@ -51,8 +56,19 @@ def init_db():
         connection.close()
 
 
+def get_subject_id(connection, subject):
+    connection.execute(
+        "INSERT OR IGNORE INTO subjects (name) VALUES (?)",
+        (subject,)
+    )
+
+    return connection.execute(
+        "SELECT id FROM subjects WHERE name = ?",
+        (subject,)
+    ).fetchone()["id"]
+
+
 def add_task(title, subject, due):
-    """Проверяет данные и сохраняет задание."""
     title = title.strip()
     subject = subject.strip()
 
@@ -65,24 +81,11 @@ def add_task(title, subject, due):
     if due is None:
         raise ValueError("Укажи срок сдачи.")
 
-    connection = sqlite3.connect(DB_PATH)
+    connection = connect()
 
     try:
-        connection.execute("PRAGMA foreign_keys = ON")
+        subject_id = get_subject_id(connection, subject)
 
-        # Добавляем предмет, если его еще нет
-        connection.execute(
-            "INSERT OR IGNORE INTO subjects (name) VALUES (?)",
-            (subject,)
-        )
-
-        # Получаем номер предмета
-        subject_id = connection.execute(
-            "SELECT id FROM subjects WHERE name = ?",
-            (subject,)
-        ).fetchone()[0]
-
-        # Сохраняем задание
         connection.execute(
             """
             INSERT INTO tasks (title, subject_id, due)
@@ -97,17 +100,129 @@ def add_task(title, subject, due):
 
 
 def get_tasks():
-    """Возвращает задания по порядку сроков сдачи."""
-    connection = sqlite3.connect(DB_PATH)
+    connection = connect()
 
     try:
-        return connection.execute(
-            """
-            SELECT tasks.title, subjects.name, tasks.due
+        return connection.execute("""
+            SELECT
+                tasks.id,
+                tasks.title,
+                subjects.name AS subject,
+                tasks.due,
+                tasks.done
             FROM tasks
             JOIN subjects ON tasks.subject_id = subjects.id
             ORDER BY tasks.due, tasks.id
-            """
-        ).fetchall()
+        """).fetchall()
     finally:
         connection.close()
+
+
+def set_task_done(task_id, done):
+    connection = connect()
+
+    try:
+        result = connection.execute(
+            "UPDATE tasks SET done = ? WHERE id = ?",
+            (int(done), task_id)
+        )
+
+        if result.rowcount == 0:
+            raise ValueError("Задание не найдено.")
+
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def add_lesson(subject, weekday, start, end, room):
+    subject = subject.strip()
+    room = room.strip()
+
+    if not subject:
+        raise ValueError("Введи название предмета.")
+
+    if weekday not in range(1, 8):
+        raise ValueError("Выбери день недели.")
+
+    if start is None or end is None:
+        raise ValueError(
+            "Укажи время начала и окончания занятия."
+        )
+
+    start_text = start.strftime("%H:%M")
+    end_text = end.strftime("%H:%M")
+
+    if end_text <= start_text:
+        raise ValueError(
+            "Время окончания должно быть позже времени начала."
+        )
+
+    connection = connect()
+
+    try:
+        subject_id = get_subject_id(connection, subject)
+
+        connection.execute(
+            """
+            INSERT INTO lessons (
+                subject_id,
+                weekday,
+                start,
+                end,
+                room
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                subject_id,
+                weekday,
+                start_text,
+                end_text,
+                room
+            )
+        )
+
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def get_lessons():
+    connection = connect()
+
+    try:
+        return connection.execute("""
+            SELECT
+                lessons.id,
+                subjects.name AS subject,
+                lessons.weekday,
+                lessons.start,
+                lessons.end,
+                lessons.room
+            FROM lessons
+            JOIN subjects ON lessons.subject_id = subjects.id
+            ORDER BY lessons.weekday, lessons.start, lessons.id
+        """).fetchall()
+    finally:
+        connection.close()
+
+
+def get_upcoming_tasks(today):
+    last_day = today + timedelta(days=6)
+
+    return [
+        task
+        for task in get_tasks()
+        if not task["done"]
+        and today.isoformat() <= task["due"] <= last_day.isoformat()
+    ]
+
+
+def get_overdue_tasks(today):
+    return [
+        task
+        for task in get_tasks()
+        if not task["done"]
+        and task["due"] < today.isoformat()
+    ]
