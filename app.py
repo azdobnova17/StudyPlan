@@ -617,6 +617,14 @@ def show_lessons(lessons):
         )
 
 
+def refresh_tasks(message):
+    st.session_state["task_version"] = (
+        st.session_state.get("task_version", 0) + 1
+    )
+    st.session_state["task_message"] = message
+    st.rerun()
+
+
 def open_section(name):
     st.session_state["section"] = name
 
@@ -699,10 +707,8 @@ if section == "Главная":
                 />
 
                 <ellipse
-                    cx="240"
-                    cy="315"
-                    rx="166"
-                    ry="27"
+                    cx="240" cy="315"
+                    rx="166" ry="27"
                     fill="#8d9d7f"
                     opacity=".18"
                 />
@@ -981,7 +987,6 @@ elif section == "Расписание":
                 end,
                 room
             )
-
             st.success("Занятие сохранено!")
         except ValueError as error:
             st.error(str(error))
@@ -1009,85 +1014,226 @@ elif section == "Задания":
     st.header("Задания")
 
     st.caption(
-        "Все учебные работы в одном списке, "
-        "по порядку сроков сдачи."
+        "Добавляй работы, меняй записи и выбирай нужные "
+        "задания по предмету и статусу."
     )
 
-    with st.form("task_form"):
+    message = st.session_state.pop("task_message", None)
+
+    if message:
+        st.success(message)
+
+    version = st.session_state.get("task_version", 0)
+
+    with st.form(f"task_form_{version}"):
         st.subheader("Новое задание")
 
         title = st.text_input(
             "Название задания",
-            placeholder="Например, лабораторная работа №6"
+            placeholder="Например, лабораторная работа №7",
+            key=f"new_title_{version}"
         )
 
         a, b = st.columns(2)
 
         subject = a.text_input(
             "Предмет",
-            placeholder="Основы интернет-экономики"
+            placeholder="Основы интернет-экономики",
+            key=f"new_subject_{version}"
         )
 
         due = b.date_input(
             "Срок сдачи",
             value=None,
-            format="DD.MM.YYYY"
+            format="DD.MM.YYYY",
+            key=f"new_due_{version}"
         )
 
-        submitted = st.form_submit_button(
-            "Сохранить задание"
-        )
+        submitted = st.form_submit_button("Сохранить задание")
 
     if submitted:
         try:
             database.add_task(title, subject, due)
-            st.success("Задание сохранено!")
+            refresh_tasks("Задание сохранено!")
         except ValueError as error:
             st.error(str(error))
 
     tasks = database.get_tasks()
 
     if tasks:
-        with st.expander(
-            "Отметить выполнение или вернуть задание в работу"
-        ):
-            names = {
-                task["id"]: (
-                    f'{task["title"]} — {task["subject"]} '
-                    f'· №{task["id"]}'
-                )
-                for task in tasks
-            }
+        heading("Мои работы", "По сроку сдачи")
 
-            with st.form("status_form"):
-                task_id = st.selectbox(
-                    "Выбери задание",
-                    list(names),
-                    format_func=lambda value: names[value]
+        a, b = st.columns(2)
+
+        subjects = sorted(
+            {task["subject"] for task in tasks},
+            key=str.casefold
+        )
+
+        subject_filter = a.selectbox(
+            "Предмет для просмотра",
+            [None] + subjects,
+            format_func=lambda value: (
+                "Все предметы" if value is None else value
+            ),
+            key="subject_filter"
+        )
+
+        status_filter = b.selectbox(
+            "Статус для просмотра",
+            ["Все задания", "Не выполнено", "Выполнено"],
+            key="status_filter"
+        )
+
+        filtered_tasks = [
+            task for task in tasks
+            if (
+                subject_filter is None
+                or task["subject"] == subject_filter
+            )
+            and (
+                status_filter == "Все задания"
+                or (
+                    status_filter == "Выполнено"
+                    and task["done"]
+                )
+                or (
+                    status_filter == "Не выполнено"
+                    and not task["done"]
+                )
+            )
+        ]
+
+        st.caption(
+            f"Показано {len(filtered_tasks)} из {len(tasks)} заданий."
+        )
+
+        if filtered_tasks:
+            show_tasks(filtered_tasks)
+        else:
+            empty_state(
+                "Подходящих заданий нет",
+                "Выбери другой предмет или статус."
+            )
+
+        heading("Управление заданиями")
+
+        st.caption(
+            "Здесь можно выбрать любую сохраненную работу, "
+            "независимо от фильтров."
+        )
+
+        tasks_by_id = {task["id"]: task for task in tasks}
+
+        selected_id = st.selectbox(
+            "Выбери задание для изменения",
+            list(tasks_by_id),
+            format_func=lambda value: (
+                f'{tasks_by_id[value]["title"]} — '
+                f'{tasks_by_id[value]["subject"]} · №{value}'
+            ),
+            key=f"managed_task_{version}"
+        )
+
+        selected = tasks_by_id[selected_id]
+        suffix = f"{selected_id}_{version}"
+
+        with st.expander("Редактировать задание"):
+            with st.form(f"edit_form_{suffix}"):
+                edited_title = st.text_input(
+                    "Название задания",
+                    value=selected["title"],
+                    key=f"edit_title_{suffix}"
                 )
 
-                status = st.selectbox(
-                    "Новый статус",
-                    ["Выполнено", "Не выполнено"]
+                a, b = st.columns(2)
+
+                edited_subject = a.text_input(
+                    "Предмет",
+                    value=selected["subject"],
+                    key=f"edit_subject_{suffix}"
                 )
 
-                submitted_status = st.form_submit_button(
-                    "Сохранить статус"
+                edited_due = b.date_input(
+                    "Срок сдачи",
+                    value=date.fromisoformat(selected["due"]),
+                    format="DD.MM.YYYY",
+                    key=f"edit_due_{suffix}"
                 )
 
-            if submitted_status:
+                save_edit = st.form_submit_button(
+                    "Сохранить изменения"
+                )
+
+            if save_edit:
                 try:
-                    database.set_task_done(
-                        task_id,
-                        status == "Выполнено"
+                    database.update_task(
+                        selected_id,
+                        edited_title,
+                        edited_subject,
+                        edited_due
                     )
-
-                    st.success("Статус сохранен!")
+                    refresh_tasks("Изменения сохранены!")
                 except ValueError as error:
                     st.error(str(error))
 
-        heading("Мои работы", "По сроку сдачи")
-        show_tasks(database.get_tasks())
+        with st.expander(
+            "Отметить выполнение или вернуть задание в работу"
+        ):
+            with st.form(f"status_form_{suffix}"):
+                status = st.selectbox(
+                    "Новый статус",
+                    ["Не выполнено", "Выполнено"],
+                    index=int(selected["done"]),
+                    key=f"edit_status_{suffix}"
+                )
+
+                save_status = st.form_submit_button(
+                    "Сохранить статус"
+                )
+
+            if save_status:
+                try:
+                    database.set_task_done(
+                        selected_id,
+                        status == "Выполнено"
+                    )
+                    refresh_tasks("Статус сохранен!")
+                except ValueError as error:
+                    st.error(str(error))
+
+        with st.expander("Удалить задание"):
+            st.write(
+                f'Выбрано задание: **{selected["title"]}**'
+            )
+
+            st.caption(
+                "После удаления восстановить запись "
+                "через сайт нельзя."
+            )
+
+            with st.form(f"delete_form_{suffix}"):
+                confirmed = st.checkbox(
+                    "Подтверждаю удаление выбранного задания",
+                    key=f"delete_confirm_{suffix}"
+                )
+
+                delete_submitted = st.form_submit_button(
+                    "Удалить задание"
+                )
+
+            if delete_submitted:
+                if not confirmed:
+                    st.error(
+                        "Сначала поставь галочку "
+                        "подтверждения удаления."
+                    )
+                else:
+                    try:
+                        database.delete_task(selected_id)
+                        refresh_tasks("Задание удалено.")
+                    except ValueError as error:
+                        st.error(str(error))
     else:
         empty_state(
             "Начни с одной записи",

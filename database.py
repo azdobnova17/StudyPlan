@@ -68,7 +68,7 @@ def get_subject_id(connection, subject):
     ).fetchone()["id"]
 
 
-def add_task(title, subject, due):
+def validate_task(title, subject, due):
     title = title.strip()
     subject = subject.strip()
 
@@ -81,6 +81,16 @@ def add_task(title, subject, due):
     if due is None:
         raise ValueError("Укажи срок сдачи.")
 
+    return title, subject, due.isoformat()
+
+
+def add_task(title, subject, due):
+    title, subject, due_text = validate_task(
+        title,
+        subject,
+        due
+    )
+
     connection = connect()
 
     try:
@@ -91,8 +101,54 @@ def add_task(title, subject, due):
             INSERT INTO tasks (title, subject_id, due)
             VALUES (?, ?, ?)
             """,
-            (title, subject_id, due.isoformat())
+            (title, subject_id, due_text)
         )
+
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def update_task(task_id, title, subject, due):
+    title, subject, due_text = validate_task(
+        title,
+        subject,
+        due
+    )
+
+    connection = connect()
+
+    try:
+        subject_id = get_subject_id(connection, subject)
+
+        result = connection.execute(
+            """
+            UPDATE tasks
+            SET title = ?, subject_id = ?, due = ?
+            WHERE id = ?
+            """,
+            (title, subject_id, due_text, task_id)
+        )
+
+        if result.rowcount == 0:
+            raise ValueError("Задание не найдено.")
+
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def delete_task(task_id):
+    connection = connect()
+
+    try:
+        result = connection.execute(
+            "DELETE FROM tasks WHERE id = ?",
+            (task_id,)
+        )
+
+        if result.rowcount == 0:
+            raise ValueError("Задание не найдено.")
 
         connection.commit()
     finally:
